@@ -2,24 +2,25 @@
 
 namespace Database\Seeders;
 
-use App\Models\User;
-use Illuminate\Database\Console\Seeds\WithoutModelEvents;
 use Illuminate\Database\Seeder;
+
+// El seeder del loan-service es mínimo: los préstamos se crean
+// operativamente desde el flujo real. Aquí solo verificamos conectividad.
 
 class DatabaseSeeder extends Seeder
 {
-    use WithoutModelEvents;
-
-    /**
-     * Seed the application's database.
-     */
     public function run(): void
     {
-        // User::factory(10)->create();
-
-        User::factory()->create([
-            'name' => 'Test User',
-            'email' => 'test@example.com',
-        ]);
+        $this->command->info('✅ Loan service listo. Los préstamos se crean desde el flujo operativo.');
+        $this->command->table(
+            ['Configuración', 'Valor'],
+            [
+                ['Duración préstamo físico',  config('library.loans.max_days') . ' días'],
+                ['Duración préstamo e-book',  config('library.loans.ebook_max_days') . ' días'],
+                ['Renovaciones máximas',      config('library.loans.max_renewals')],
+                ['Días por renovación',       config('library.loans.renewal_days')],
+                ['Préstamos simultáneos',     config('library.loans.max_active_per_user')],
+            ]
+        );
     }
 }
