@@ -1,0 +1,26 @@
+# Ignorar dependencias (No subir los gigabytes de paquetes)
+**/vendor/
+**/node_modules/
+
+# Ignorar archivos de entorno (Tus contraseñas secretas)
+.env
+.env.backup
+.env.production
+**/.env
+
+# Bases de datos y caché local
+**/redis-data/
+*.sqlite
+*.sqlite3
+
+# Logs y archivos temporales de Laravel
+**/storage/logs/*.log
+**/storage/framework/cache/data/*
+**/storage/framework/sessions/*
+**/storage/framework/views/*
+**/storage/framework/testing/*
+**/bootstrap/cache/*
+
+# SO
+.DS_Store
+Thumbs.db
