@@ -12,23 +12,19 @@ return new class extends Migration
     {
         Schema::create('authors', function (Blueprint $table) {
             $table->uuid('id')->primary()->default(DB::raw('gen_random_uuid()'));
-            $table->string('name');
+            $table->string('name', 200);
+            $table->string('slug', 220)->unique();
             $table->text('biography')->nullable();
+            $table->string('photo_url')->nullable();
+            $table->string('nationality', 100)->nullable();
+            $table->date('birth_date')->nullable();
+            $table->date('death_date')->nullable();
             $table->timestamps();
-        });
+            $table->softDeletes();
 
-        Schema::create('categories', function (Blueprint $table) {
-            $table->uuid('id')->primary()->default(DB::raw('gen_random_uuid()'));
-            $table->string('name')->unique();
-            $table->string('slug')->unique();
-            $table->text('description')->nullable();
-            $table->timestamps();
+            $table->index('name');
         });
     }
 
-    public function down(): void
-    {
-        Schema::dropIfExists('categories');
-        Schema::dropIfExists('authors');
-    }
+    public function down(): void { Schema::dropIfExists('authors'); }
 };

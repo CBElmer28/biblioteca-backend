@@ -1,22 +1,60 @@
 <?php
 
+use App\Http\Controllers\Api\AuthorController;
 use App\Http\Controllers\Api\BookController;
+use App\Http\Controllers\Api\CategoryController;
 use App\Http\Controllers\Api\CopyController;
 use Illuminate\Support\Facades\Route;
 
-// Rutas Públicas (Lectores explorando el catálogo)
-Route::get('/books', [BookController::class, 'index']);
-Route::get('/books/{id}', [BookController::class, 'show']);
+// =============================================================================
+// Rutas PÚBLICAS — Catálogo visible sin autenticación
+// (cualquier visitante puede explorar el inventario)
+// =============================================================================
+Route::get('books',                    [BookController::class, 'index']);
+Route::get('books/available',          [BookController::class, 'available']);
+Route::get('books/{slug}',             [BookController::class, 'show']);
+Route::get('books/{bookId}/copies',    [CopyController::class, 'index']);
+Route::get('copies/find/{copyCode}',   [CopyController::class, 'showByCode']);
+Route::get('authors',                  [AuthorController::class, 'index']);
+Route::get('authors/{slug}',           [AuthorController::class, 'show']);
+Route::get('categories',               [CategoryController::class, 'index']);
 
-// Rutas Protegidas (Requieren Token JWT válido enviado desde el API Gateway)
-Route::middleware('auth.jwt')->group(function () {
-    
-    // Solo personal autorizado puede modificar el inventario
-    // Nota: El middleware 'role' asume que lo copiaste del identity-service o lo verificas vía claims del JWT
-    Route::middleware('role:admin,bibliotecario')->group(function () {
-        Route::post('/books', [BookController::class, 'store']);
-        Route::post('/copies', [CopyController::class, 'store']);
-        
-        // Aquí irían también los endpoints de Author y Category
-    });
+// =============================================================================
+// Rutas PROTEGIDAS — Solo bibliotecarios y admin gestionan el inventario
+// Middleware 'jwt:admin,bibliotecario' → JwtMiddleware con verificación de roles
+// =============================================================================
+Route::middleware('jwt:admin,bibliotecario')->group(function () {
+
+    // ── Gestión de libros ──────────────────────────────────────────────────
+    Route::post('books',           [BookController::class, 'store']);
+    Route::put('books/{id}',       [BookController::class, 'update']);
+    Route::delete('books/{id}',    [BookController::class, 'destroy']);
+
+    // ── Gestión de ejemplares físicos ──────────────────────────────────────
+    Route::post('books/{bookId}/copies',       [CopyController::class, 'store']);
+    Route::put('copies/{id}',                  [CopyController::class, 'update']);
+    Route::patch('copies/{id}/condition',      [CopyController::class, 'updateCondition']);
+    Route::delete('copies/{id}',               [CopyController::class, 'destroy']);
+
+    // ── Gestión de autores y categorías ────────────────────────────────────
+    Route::post('authors',         [AuthorController::class, 'store']);
+    Route::put('authors/{id}',     [AuthorController::class, 'update']);
+    Route::post('categories',      [CategoryController::class, 'store']);
+    Route::put('categories/{id}',  [CategoryController::class, 'update']);
 });
+
+// =============================================================================
+// Endpoint INTERNO — Solo accesible por loan-service (X-Internal-Secret)
+// No pasa por JWT — comunicación service-to-service
+// =============================================================================
+Route::post(
+    'internal/copies/{id}/transition',
+    [CopyController::class, 'internalTransition']
+);
+
+// Health-check
+Route::get('/health', fn() => response()->json([
+    'service' => 'inventory-service',
+    'status'  => 'ok',
+    'time'    => now()->toIso8601String(),
+]));
