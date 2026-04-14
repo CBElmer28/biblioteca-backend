@@ -5,12 +5,6 @@ use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
-// =============================================================================
-// copies — Ejemplar físico individual. Corazón del módulo físico.
-// REGLA DURA: Solo puede existir si el libro padre tiene is_digital = false.
-// Esta restricción se aplica a nivel de FormRequest Y de modelo (boot).
-// =============================================================================
-
 return new class extends Migration
 {
     protected $connection = 'pgsql_direct';
@@ -23,36 +17,22 @@ return new class extends Migration
             $table->uuid('book_id');
             $table->foreign('book_id')
                   ->references('id')->on('books')
-                  ->onDelete('restrict'); // No eliminar libro con copias
+                  ->onDelete('restrict'); 
 
-            // Código de identificación física (etiqueta / código de barras / RFID)
-            // Formato: BIB-YYYY-NNNNNN  → ej: BIB-2024-000042
             $table->string('copy_code', 30)->unique();
 
-            // ── Condición física del ejemplar ─────────────────────────────────
             $table->enum('condition', ['new', 'good', 'worn', 'damaged', 'lost'])
                   ->default('new');
 
-            // ── Máquina de estados del ejemplar ──────────────────────────────
-            // available  → Puede prestarse
-            // loaned     → En posesión de un lector
-            // reserved   → Reservado, pendiente de retiro
-            // in_repair  → En restauración / encuadernación
-            // withdrawn  → Dado de baja (estado terminal)
             $table->enum('status', ['available', 'loaned', 'reserved', 'in_repair', 'withdrawn'])
                   ->default('available');
 
-            // Ubicación física: Sala-Estante-Nivel-Posición (ej: "A-03-2-15")
             $table->string('location', 30)->nullable();
-
-            // false → Solo consulta en sala, no se presta a domicilio
             $table->boolean('is_loanable')->default(true);
-
-            // Contador de veces que fue prestado (métricas de uso)
             $table->unsignedSmallInteger('loan_count')->default(0);
 
             $table->date('acquired_at')->nullable();
-            $table->decimal('acquisition_cost', 8, 2)->nullable(); // Para multas por pérdida
+            $table->decimal('acquisition_cost', 8, 2)->nullable(); 
 
             $table->text('internal_notes')->nullable();
             $table->timestamps();
@@ -67,20 +47,42 @@ return new class extends Migration
         // Secuencia correlativa para copy_code
         DB::statement("CREATE SEQUENCE IF NOT EXISTS inventory.copy_code_seq START 1");
 
-        // Restricción a nivel de base de datos: solo libros físicos pueden tener copias
-        // CHECK a través de una función para poder referenciar la tabla padre
+        // 1. Crear la función PL/pgSQL que verifica si el libro es digital
         DB::statement("
-            ALTER TABLE inventory.copies
-            ADD CONSTRAINT copies_only_for_physical_books
-            CHECK (
-                (SELECT is_digital FROM inventory.books WHERE id = book_id) = false
-            )
+            CREATE OR REPLACE FUNCTION inventory.check_copy_is_physical()
+            RETURNS TRIGGER AS $$
+            DECLARE
+                v_is_digital BOOLEAN;
+            BEGIN
+                -- Buscar el flag is_digital del libro padre
+                SELECT is_digital INTO v_is_digital FROM inventory.books WHERE id = NEW.book_id;
+                
+                -- Si es digital, abortar la transacción con una excepción
+                IF v_is_digital = true THEN
+                    RAISE EXCEPTION 'Violación de integridad: No se pueden crear copias físicas para libros digitales (E-books).';
+                END IF;
+                
+                RETURN NEW;
+            END;
+            $$ LANGUAGE plpgsql;
+        ");
+
+        // 2. Asociar la función a un Trigger en la tabla copies
+        DB::statement("
+            CREATE TRIGGER enforce_physical_copies_only
+            BEFORE INSERT OR UPDATE ON inventory.copies
+            FOR EACH ROW
+            EXECUTE FUNCTION inventory.check_copy_is_physical();
         ");
     }
 
     public function down(): void
     {
+        // Borrar el trigger y la función antes de la tabla
+        DB::statement('DROP TRIGGER IF EXISTS enforce_physical_copies_only ON inventory.copies');
+        DB::statement('DROP FUNCTION IF EXISTS inventory.check_copy_is_physical()');
         DB::statement('DROP SEQUENCE IF EXISTS inventory.copy_code_seq');
+        
         Schema::dropIfExists('copies');
     }
 };
