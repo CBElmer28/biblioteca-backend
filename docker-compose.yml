@@ -12,6 +12,8 @@ networks:
 
 volumes:
   redis_data:
+  glpi_db_data:
+  glpi_app_data:
 
 services:
 
@@ -198,6 +200,47 @@ services:
       - biblioteca_net
     depends_on:
       - redis
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+
+  # ============================================================================
+  # GLPI HELPDESK — Mesa de ayuda y Ticketing
+  # Base de Datos independiente (MariaDB) para GLPI
+  # ============================================================================
+  glpi-db:
+    image: mariadb:10.11
+    container_name: biblioteca_glpi_db
+    environment:
+      - MARIADB_ROOT_PASSWORD=root_secret_glpi
+      - MARIADB_DATABASE=glpi_db
+      - MARIADB_USER=glpi_user
+      - MARIADB_PASSWORD=glpi_password
+    volumes:
+      - glpi_db_data:/var/lib/mysql
+    networks:
+      - biblioteca_net
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+
+  glpi:
+    image: diouxx/glpi:latest
+    container_name: biblioteca_glpi
+    ports:
+      - "8081:80" # Tu API Gateway usa el 8080, dejaremos GLPI en el 8081
+    environment:
+      - TIMEZONE=America/Lima
+    volumes:
+      - glpi_app_data:/var/www/html/glpi
+    networks:
+      - biblioteca_net
+    depends_on:
+      - glpi-db
     restart: unless-stopped
     deploy:
       resources:

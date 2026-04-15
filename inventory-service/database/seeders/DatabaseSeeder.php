@@ -2,96 +2,85 @@
 
 namespace Database\Seeders;
 
+use Illuminate\Database\Seeder;
+use App\Models\Category;
 use App\Models\Author;
 use App\Models\Book;
-use App\Models\Category;
-use Illuminate\Database\Seeder;
+use App\Models\Copy;
 
 class DatabaseSeeder extends Seeder
 {
     public function run(): void
     {
-        // ---------------------------------------------------------------
-        // Categorías principales de una librería clásica
-        // ---------------------------------------------------------------
-        $categories = [
-            ['name' => 'Literatura',       'children' => ['Novela', 'Cuento', 'Poesía', 'Teatro']],
-            ['name' => 'Ciencia Ficción',  'children' => ['Space Opera', 'Cyberpunk', 'Distopía']],
-            ['name' => 'Historia',         'children' => ['Historia Universal', 'Historia del Perú', 'Biografías']],
-            ['name' => 'Ciencia',          'children' => ['Física', 'Biología', 'Astronomía']],
-            ['name' => 'Tecnología',       'children' => ['Programación', 'Inteligencia Artificial', 'DevOps']],
-            ['name' => 'Filosofía',        'children' => ['Filosofía Clásica', 'Ética', 'Epistemología']],
-            ['name' => 'Autoayuda',        'children' => ['Productividad', 'Finanzas Personales']],
-        ];
+        // 1. Crear Categorías (Usando UUIDs para el parent_id)
+        $literatura = Category::create([
+            'name' => 'Literatura Clásica',
+            'description' => 'Obras literarias de gran valor histórico.'
+        ]);
 
-        foreach ($categories as $catData) {
-            $parent = Category::create([
-                'name'      => $catData['name'],
-                'is_active' => true,
-            ]);
+        $novela = Category::create([
+            'name' => 'Novela',
+            'parent_id' => $literatura->id, // <-- AQUÍ usamos el UUID dinámico, no un '1'
+            'description' => 'Narrativas extensas.'
+        ]);
 
-            foreach ($catData['children'] as $childName) {
-                Category::create([
-                    'name'      => $childName,
-                    'parent_id' => $parent->id,
-                    'is_active' => true,
-                ]);
-            }
-        }
+        // 2. Crear Autores
+        $garciaMarquez = Author::create([
+            'name' => 'Gabriel García Márquez',
+            'nationality' => 'Colombiana',
+        ]);
 
-        // ---------------------------------------------------------------
-        // Autores de muestra
-        // ---------------------------------------------------------------
-        $authors = [
-            ['name' => 'Mario Vargas Llosa',   'nationality' => 'PE'],
-            ['name' => 'Gabriel García Márquez','nationality' => 'CO'],
-            ['name' => 'Jorge Luis Borges',     'nationality' => 'AR'],
-            ['name' => 'Robert C. Martin',      'nationality' => 'US'],
-            ['name' => 'Martin Fowler',         'nationality' => 'GB'],
-        ];
+        $georgeOrwell = Author::create([
+            'name' => 'George Orwell',
+            'nationality' => 'Británica',
+        ]);
 
-        foreach ($authors as $authorData) {
-            Author::create($authorData);
-        }
+        // 3. Crear Libro FÍSICO
+        $libroFisico = Book::create([
+            'title' => 'Cien años de soledad',
+            'synopsis' => 'La historia de la familia Buendía en Macondo.',
+            'publisher' => 'Editorial Sudamericana',
+            'publication_year' => 1967,
+            'is_digital' => false, // Es físico
+        ]);
+        
+        // Relacionar libro físico con autor y categoría (Eloquent maneja los UUIDs en la tabla pivot)
+        $libroFisico->authors()->attach($garciaMarquez->id, ['role' => 'primary']);
+        $libroFisico->categories()->attach($novela->id);
 
-        // ---------------------------------------------------------------
-        // Libros de muestra (10 libros representativos)
-        // ---------------------------------------------------------------
-        $novela = Category::where('name', 'Novela')->first();
-        $prog   = Category::where('name', 'Programación')->first();
-        $vll    = Author::where('name', 'Mario Vargas Llosa')->first();
-        $rcm    = Author::where('name', 'Robert C. Martin')->first();
+        // Crear copias físicas para este libro
+        Copy::create([
+            'book_id' => $libroFisico->id,
+            'copy_code' => Copy::generateCopyCode(),
+            'condition' => 'new',
+            'status' => 'available',
+            'location' => 'Sala A - Estante 1'
+        ]);
+        
+        Copy::create([
+            'book_id' => $libroFisico->id,
+            'copy_code' => Copy::generateCopyCode(),
+            'condition' => 'good',
+            'status' => 'available',
+            'location' => 'Sala A - Estante 1'
+        ]);
 
-        $books = [
-            [
-                'title'    => 'La Ciudad y los Perros',
-                'synopsis' => 'Una novela que retrata la vida en el Colegio Militar Leoncio Prado de Lima.',
-                'price'    => 45.00,
-                'stock'    => 30,
-                'author_id'=> $vll->id,
-                'status'   => 'active',
-                'categories'=> [$novela->id],
-            ],
-            [
-                'title'    => 'Clean Code',
-                'synopsis' => 'Guía práctica para escribir código limpio, legible y mantenible.',
-                'price'    => 89.90,
-                'stock'    => 15,
-                'author_id'=> $rcm->id,
-                'status'   => 'active',
-                'is_featured' => true,
-                'categories'=> [$prog->id],
-            ],
-        ];
+        // Actualizar contadores del libro físico
+        $libroFisico->recalculateCopyCounts();
 
-        foreach ($books as $bookData) {
-            $categories = $bookData['categories'] ?? [];
-            unset($bookData['categories']);
+        // 4. Crear E-BOOK (Digital)
+        $eBook = Book::create([
+            'title' => '1984',
+            'synopsis' => 'Una novela distópica sobre la vigilancia del gobierno.',
+            'publisher' => 'Secker & Warburg',
+            'publication_year' => 1949,
+            'is_digital' => true, // Es digital
+            'digital_file_url' => 'https://biblioteca.local/archivos/1984.pdf'
+        ]);
 
-            $book = Book::create($bookData);
-            $book->categories()->sync($categories);
-        }
-
-        $this->command->info('✅ Catalog seeder completado: categorías, autores y libros de muestra creados.');
+        $eBook->authors()->attach($georgeOrwell->id, ['role' => 'primary']);
+        $eBook->categories()->attach($novela->id);
+        
+        // REGLA HÍBRIDA: Los E-books NO tienen copias en la tabla copies.
     }
 }

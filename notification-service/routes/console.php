@@ -1,8 +1,8 @@
 <?php
 
-use Illuminate\Foundation\Inspiring;
-use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\Schedule;
 
-Artisan::command('inspire', function () {
-    $this->comment(Inspiring::quote());
-})->purpose('Display an inspiring quote');
+// Limpiar logs de notificaciones exitosas con más de 90 días
+Schedule::command('model:prune', [
+    '--model' => \App\Models\NotificationLog::class,
+])->monthly()->withoutOverlapping();

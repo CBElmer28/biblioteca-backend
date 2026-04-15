@@ -1,8 +1,8 @@
 # =============================================================================
 # Dockerfile compartido para todos los microservicios Laravel
-# Imagen base ligera con PHP 8.3 + extensiones necesarias para PostgreSQL
+# Imagen base ligera con PHP 8.4 + extensiones necesarias para PostgreSQL
 # =============================================================================
-FROM php:8.3-cli-alpine
+FROM php:8.4-cli-alpine
 
 # Instalar dependencias del sistema y extensiones PHP
 RUN apk add --no-cache \
