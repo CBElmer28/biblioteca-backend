@@ -32,13 +32,6 @@ Route::middleware('jwt')->group(function () {
         Route::post('/logout', [AuthController::class, 'logout']);
     });
 
-    // Tickets de soporte (todos los usuarios autenticados)
-    Route::prefix('tickets')->group(function () {
-        Route::get('/',     [TicketController::class, 'index']);
-        Route::post('/',    [TicketController::class, 'store']);
-        Route::get('/{id}', [TicketController::class, 'show']);
-    });
-
     // -------------------------------------------------------------------
     // Rutas ADMIN — Solo para roles admin o support
     // Uso: Route::middleware('jwt:admin') o 'jwt:admin,support'

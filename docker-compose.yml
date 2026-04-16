@@ -206,6 +206,33 @@ services:
         limits:
           memory: 256m
 
+  support-service:
+    build:
+      context: ./support-service
+      dockerfile: ../docker/laravel.Dockerfile
+    container_name: biblioteca_support
+    working_dir: /var/www/html
+    # 2 procesos: subscriber Redis + servidor HTTP para la REST API
+    command: >
+      sh -c "php artisan events:subscribe &
+             php artisan serve --host=0.0.0.0 --port=8000"
+    volumes:
+      - ./support-service:/var/www/html
+      - /var/www/html/vendor
+    environment:
+      APP_ENV: local
+      DB_CONNECTION: null           # Sin base de datos
+    env_file:
+      - .env
+    networks:
+      - biblioteca_net
+    depends_on:
+      - redis
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 128m              # Ligero: sin DB, solo HTTP + Redis
   # ============================================================================
   # GLPI HELPDESK — Mesa de ayuda y Ticketing
   # Base de Datos independiente (MariaDB) para GLPI
@@ -246,3 +273,5 @@ services:
       resources:
         limits:
           memory: 256m
+  
+  # Agregar este bloque al docker-compose.yml existente:
