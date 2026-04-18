@@ -20,10 +20,11 @@ return [
         ],
     ],
 
-    'providers' => [
+'providers' => [
+        // Cambiamos 'eloquent' por 'database' para que deje de buscar la clase User
         'users' => [
-            'driver' => 'eloquent',
-            'model'  => App\Models\User::class,
+            'driver' => 'database',
+            'table'  => 'users', // No importa que no exista esta tabla aquí
         ],
     ],
 

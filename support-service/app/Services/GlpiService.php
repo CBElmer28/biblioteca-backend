@@ -27,60 +27,78 @@ class GlpiService
 
     public function __construct()
     {
-        $this->baseUrl = config('glpi.url') . '/apirest.php';
+        $this->baseUrl    = rtrim(config('glpi.url'), '/');
+        $this->appToken   = config('glpi.app_token');
+        $this->userToken  = config('glpi.user_token');
+        $this->sessionTtl = config('glpi.session_ttl', 3000);
     }
 
     // =========================================================================
     // GESTIÓN DE SESIÓN
     // =========================================================================
 
-    private function getSessionToken(): string
+    public function getSessionToken(): ?string
     {
-        return Cache::remember(
-            'glpi_session_token',
-            now()->addMinutes(config('glpi.session_ttl_minutes', 50)),
-            function () {
+        return Cache::remember('glpi_session_token', $this->sessionTtl, function () {
+            try {
                 $response = Http::withHeaders([
-                    'App-Token'     => config('glpi.app_token'),
-                    'Authorization' => 'user_token ' . config('glpi.user_token'),
+                    'App-Token'     => $this->appToken,
+                    'Authorization' => "user_token {$this->userToken}",
                     'Content-Type'  => 'application/json',
                 ])->get("{$this->baseUrl}/initSession");
 
-                if ($response->failed()) {
-                    throw new \RuntimeException(
-                        "GLPI: No se pudo iniciar sesión. Status: {$response->status()}"
-                    );
+                if ($response->successful()) {
+                    return $response->json('session_token');
                 }
 
-                $token = $response->json('session_token');
-
-                if (!$token) {
-                    throw new \RuntimeException('GLPI: session_token no recibido.');
-                }
-
-                return $token;
+                Log::error('GLPI initSession failed', ['response' => $response->body()]);
+                return null;
+            } catch (\Exception $e) {
+                Log::error('GLPI connection error', ['error' => $e->getMessage()]);
+                return null;
             }
-        );
+        });
     }
 
-    /** Construye el cliente HTTP base con los headers de autenticación */
-    private function client(): PendingRequest
-    {
-        return Http::withHeaders([
-            'App-Token'     => config('glpi.app_token'),
-            'Session-Token' => $this->getSessionToken(),
-            'Content-Type'  => 'application/json',
-        ])->timeout(15);
-    }
-
-    /**
-     * Invalida el session_token cacheado y reintenta la llamada.
-     * Llamar cuando GLPI responde 401.
-     */
-    private function refreshSessionAndRetry(callable $call): mixed
+    public function invalidateSession(): void
     {
         Cache::forget('glpi_session_token');
-        return $call();
+    }
+
+    protected function authHeaders(): array
+    {
+        return [
+            'App-Token'     => $this->appToken,
+            'Session-Token' => $this->getSessionToken() ?? '',
+            'Content-Type'  => 'application/json',
+        ];
+    }
+
+    protected function request(string $method, string $url, array $options = [])
+    {
+        $doRequest = function () use ($method, $url, $options) {
+            $http = Http::withHeaders($this->authHeaders());
+            return match ($method) {
+                'GET'    => $http->get($url, $options['query'] ?? []),
+                'POST'   => $http->post($url, $options['json'] ?? []),
+                'PUT'    => $http->put($url, $options['json'] ?? []),
+                'DELETE' => $http->delete($url, $options['json'] ?? []),
+            };
+        };
+
+        $response = $doRequest();
+
+        if ($response->status() === 401) {
+            $this->invalidateSession();
+            $response = $doRequest();
+        }
+
+        return $response;
+    }
+
+    public function ping(): bool
+    {
+        return $this->getSessionToken() !== null;
     }
 
     // =========================================================================
@@ -294,6 +312,123 @@ class GlpiService
         ], $response->json());
     }
 
+    /**
+     * Crear un Libro (Activo Personalizado) en GLPI.
+     * Mapeo sugerido de IDs en GLPI: 1:Título, 2:Autor, 3:ISBN
+     */
+    public function createBookAsset(array $bookData): array
+    {
+        $itemtype = config('glpi.book_itemtype');
+        
+        // Extraer nombres de relaciones (autores y categorías)
+        $autores = collect($bookData['authors'] ?? [])->pluck('name')->implode(', ');
+        $categorias = collect($bookData['categories'] ?? [])->pluck('name')->implode(', ');
+
+        $customFields = json_encode([
+            "1" => $autores ?: 'Sin Autor',
+            "2" => $categorias ?: 'Sin Categoría',
+            "3" => $bookData['publication_year'] ?? '',
+            "4" => $bookData['language'] ?? 'es',
+            "5" => ($bookData['is_digital'] ?? false) ? 'Digital' : 'Físico',
+        ]);
+
+        $payload = [
+            'input' => [
+                'name'          => $bookData['title'] ?? 'Nuevo Libro',
+                'custom_fields' => $customFields,
+                'comment'       => "ISBN: " . ($bookData['isbn_13'] ?? 'N/A') . " | Sincronizado vía Evento Redis",
+            ],
+        ];
+
+        $response = $this->request('POST', "{$this->baseUrl}/{$itemtype}", ['json' => $payload]);
+
+        if (!$response->successful()) {
+            throw new \RuntimeException("GLPI: Error al crear Libro. Status: {$response->status()} — " . $response->body());
+        }
+
+        return $response->json();
+    }
+
+    public function createCopyAsset(array $copyData): array
+    {
+        $itemtype = config('glpi.copy_itemtype');
+        
+        $customFields = json_encode([
+            "1" => $copyData['condition'] ?? 'new',
+            "2" => $copyData['location'] ?? 'Sin asignar',
+            "3" => ($copyData['is_loanable'] ?? true) ? 'Sí' : 'No',
+            "4" => $copyData['acquired_at'] ?? '',
+            "5" => $copyData['acquisition_cost'] ?? '0.00',
+        ]);
+
+        $payload = [
+            'input' => [
+                'name'          => $copyData['copy_code'],
+                'serial'        => $copyData['copy_code'], 
+                'states_id'     => $this->mapStatusToGlpi($copyData['status'] ?? 'available'),
+                'custom_fields' => $customFields,
+                'comment'       => $copyData['internal_notes'] ?? "Copia física del libro.",
+            ],
+        ];
+
+        $response = $this->request('POST', "{$this->baseUrl}/{$itemtype}", ['json' => $payload]);
+
+        if (!$response->successful()) {
+            throw new \RuntimeException("GLPI: Error al crear Copia. Status: {$response->status()} — " . $response->body());
+        }
+
+        return $response->json();
+    }
+
+    public function updateAsset(string $itemtype, int $glpiId, array $input): bool
+    {
+        $payload = [
+            'input' => array_merge(['id' => $glpiId], $input)
+        ];
+
+        $response = $this->request('PUT', "{$this->baseUrl}/{$itemtype}/{$glpiId}", ['json' => $payload]);
+
+        if (!$response->successful()) {
+            Log::error("GLPI: Error al actualizar {$itemtype} #{$glpiId}", ['body' => $response->body()]);
+        }
+
+        return $response->successful();
+    }
+
+    public function deleteAsset(string $itemtype, int $glpiId, bool $forcePurge = false): bool
+    {
+        $url = "{$this->baseUrl}/{$itemtype}/{$glpiId}";
+        if ($forcePurge) {
+            $url .= "?force_purge=true";
+        }
+
+        $response = $this->request('DELETE', $url);
+
+        return $response->successful();
+    }
+
+    public function linkAssets(string $itemtype1, int $itemsId1, string $itemtype2, int $itemsId2): bool
+    {
+        $payload = [
+            'input' => [
+                'itemtype1' => $itemtype1,
+                'items_id1' => $itemsId1,
+                'itemtype2' => $itemtype2,
+                'items_id2' => $itemsId2,
+            ]
+        ];
+
+        $response = $this->request('POST', "{$this->baseUrl}/Item_Item", ['json' => $payload]);
+
+        if (!$response->successful()) {
+            Log::error("GLPI: Error al vincular activos", ['body' => $response->body()]);
+        }
+
+        return $response->successful();
+    }
+
+
+
     // =========================================================================
     // USUARIOS
     // =========================================================================
@@ -341,6 +476,15 @@ class GlpiService
     // =========================================================================
     // HELPERS PRIVADOS
     // =========================================================================
+
+    public function updateCopyStatus(int $glpiId, string $newStatus): bool
+    {
+        return $this->updateAsset(
+            config('glpi.copy_itemtype'), 
+            $glpiId, 
+            ['states_id' => $this->mapStatusToGlpi($newStatus)]
+        );
+    }
 
     /** Normaliza un ticket de GLPI al formato interno del sistema */
     private function normalizeTicket(array $raw): array
@@ -393,5 +537,17 @@ class GlpiService
 
             return 1;  // Superadmin de GLPI como fallback final
         });
+    }
+
+    private function mapStatusToGlpi(string $status): int
+    {
+        $map = [
+            'available' => 1, // Ej: Disponible
+            'loaned'    => 2, // Ej: Prestado
+            'damaged'   => 3, // Ej: En Mantenimiento
+            'lost'      => 4, // Ej: Extraviado
+        ];
+
+        return $map[$status] ?? 1; // Por defecto lo pone como Disponible
     }
 }

@@ -74,14 +74,14 @@ class CopyController extends Controller
                     'condition'        => $request->condition,
                     'status'           => 'available',
                     'location'         => $request->location,
-                    'is_loanable'      => $request->boolean('is_loanable', true),
+                    'is_loanable'      => $request->boolean('is_loanable', true) ? 'true' :'false',
                     'acquired_at'      => $request->acquired_at ?? today()->toDateString(),
                     'acquisition_cost' => $request->acquisition_cost,
                     'internal_notes'   => $request->internal_notes,
                 ]);
 
                 // Registro de adquisición en el log de auditoría
-                $user = JWTAuth::user();
+                $user = request()->attributes->get('auth_user');
                 \App\Models\CopyConditionLog::create([
                     'copy_id'          => $copy->id,
                     'from_condition'   => null,
@@ -103,6 +103,22 @@ class CopyController extends Controller
 
             DB::commit();
 
+            // Notificar al ecosistema (GLPI) por CADA copia creada
+            foreach ($created as $copy) {
+                \Illuminate\Support\Facades\Redis::publish(
+                    config('app.redis_events_channel', 'libreria.events'),
+                    json_encode([
+                        'event'     => 'copy.created',
+                        'payload'   => array_merge($copy->toArray(), [
+                            'book_title'   => $book->title,
+                            'book_glpi_id' => $book->glpi_id // IMPORTANTE: Tu tabla books debe tener este campo
+                        ]),
+                        'source'    => 'inventory-service',
+                        'timestamp' => now()->toIso8601String()
+                    ])
+                );
+            }
+
             return response()->json([
                 'success' => true,
                 'message' => "{$quantity} ejemplar(es) registrado(s) correctamente.",
@@ -114,7 +130,7 @@ class CopyController extends Controller
             return response()->json(['success' => false, 'message' => $e->getMessage()], 422);
         } catch (\Throwable $e) {
             DB::rollBack();
-            return response()->json(['success' => false, 'message' => 'Error al registrar ejemplar.'], 500);
+            return response()->json(['success' => false, 'message' => 'Error al registrar ejemplar.', 'debug_error' => $e->getMessage(), 'line' => $e->getLine()], 500);
         }
     }
 
@@ -122,7 +138,7 @@ class CopyController extends Controller
     public function updateCondition(UpdateCopyConditionRequest $request, string $id): JsonResponse
     {
         $copy = Copy::findOrFail($id);
-        $user = JWTAuth::user();
+        $user = request()->attributes->get('auth_user');
 
         try {
             $copy->transitionTo(
@@ -156,6 +172,10 @@ class CopyController extends Controller
             'internal_notes' => ['sometimes', 'nullable', 'string', 'max:500'],
         ]);
 
+        if ($request->has('is_loanable')) {
+            $data['is_loanable'] = $request->boolean('is_loanable') ? 'true' : 'false';
+        }
+
         $copy->update($data);
 
         return response()->json(['success' => true, 'data' => $copy]);
@@ -175,7 +195,8 @@ class CopyController extends Controller
 
         DB::beginTransaction();
         try {
-            $user = JWTAuth::user();
+            $user = request()->attributes->get('auth_user');
+            $glpiId = $copy->glpi_id; // Rescatamos el ID antes de eliminar el registro
 
             if ($copy->status !== 'withdrawn') {
                 $copy->transitionTo(
@@ -190,12 +211,29 @@ class CopyController extends Controller
             $copy->delete();
             DB::commit();
 
+            // Notificar a GLPI de la destrucción
+            if ($glpiId) {
+                \Illuminate\Support\Facades\Redis::publish(
+                    config('app.redis_events_channel', 'libreria.events'),
+                    json_encode([
+                        'event'     => 'copy.deleted',
+                        'payload'   => ['glpi_id' => $glpiId],
+                        'source'    => 'inventory-service'
+                    ])
+                );
+            } // Cerramos correctamente el if que faltaba en tu código
+
             return response()->json(['success' => true, 'message' => 'Ejemplar dado de baja y eliminado.']);
 
         } catch (\Throwable $e) {
             DB::rollBack();
-            return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
-        }
+            return response()->json([
+                'success' => false, 
+                'message' => 'Error al eliminar el ejemplar',
+                'debug_error' => $e->getMessage(),
+                'line' => $e->getLine()
+            ], 500);
+        } 
     }
 
     // ── POST /api/v1/internal/copies/{id}/transition — Endpoint interno ───────
@@ -228,6 +266,18 @@ class CopyController extends Controller
                 notes:         $data['notes'] ?? null,
             );
 
+            \Illuminate\Support\Facades\Redis::publish(
+                config('app.redis_events_channel', 'libreria.events'),
+                json_encode([
+                    'event'     => 'copy.updated',
+                    'payload'   => [
+                        'glpi_id' => $copy->glpi_id, // IMPORTANTE: Tu tabla copies debe tener este campo
+                        'status'  => $copy->status
+                    ],
+                    'source'    => 'inventory-service'
+                ])
+            );
+
             return response()->json([
                 'success'          => true,
                 'copy_code'        => $copy->copy_code,
@@ -238,5 +288,59 @@ class CopyController extends Controller
         } catch (\DomainException $e) {
             return response()->json(['success' => false, 'message' => $e->getMessage()], 422);
         }
+    }
+
+    // ── POST /api/v1/copies/{id}/sync ─────────────────────────────────────────
+    public function sync(string $id): JsonResponse
+    {
+        $copy = Copy::with('book')->findOrFail($id);
+
+        if (!$copy->book->glpi_id) {
+            return response()->json([
+                'success' => false,
+                'message' => 'El libro padre debe estar sincronizado antes de sincronizar sus copias.'
+            ], 409);
+        }
+
+        $event = $copy->glpi_id ? 'copy.updated' : 'copy.created';
+
+        $payload = array_merge($copy->toArray(), [
+            'book_title'   => $copy->book->title,
+            'book_glpi_id' => $copy->book->glpi_id
+        ]);
+
+        \Illuminate\Support\Facades\Redis::publish(
+            config('app.redis_events_channel', 'libreria.events'),
+            json_encode([
+                'event'     => $event,
+                'payload'   => $payload,
+                'source'    => 'inventory-service-manual-sync',
+                'timestamp' => now()->toIso8601String()
+            ])
+        );
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Sincronización de copia encolada hacia el ecosistema.',
+            'event_dispatched' => $event
+        ], 202);
+    }
+
+    // ── PATCH /api/v1/internal/copies/{id}/glpi-id ────────────────────────────
+    public function updateGlpiId(Request $request, string $id): JsonResponse
+    {
+        // Seguridad: Solo otros microservicios pueden llamar a esto
+        if ($request->header('X-Internal-Secret') !== config('app.internal_secret')) {
+            return response()->json(['error' => 'Unauthorized'], 401);
+        }
+
+        $data = $request->validate([
+            'glpi_id' => ['required', 'integer']
+        ]);
+
+        $copy = Copy::findOrFail($id);
+        $copy->update(['glpi_id' => $data['glpi_id']]);
+
+        return response()->json(['success' => true, 'message' => 'GLPI ID actualizado.']);
     }
 }

@@ -14,7 +14,7 @@ class Copy extends Model
     protected $fillable = [
         'book_id', 'copy_code', 'condition', 'status',
         'location', 'is_loanable', 'loan_count',
-        'acquired_at', 'acquisition_cost', 'internal_notes',
+        'acquired_at', 'acquisition_cost', 'internal_notes', 'glpi_id',
     ];
 
     protected function casts(): array
@@ -89,7 +89,7 @@ class Copy extends Model
         'loaned'    => ['available', 'withdrawn'],
         'reserved'  => ['available', 'loaned',  'withdrawn'],
         'in_repair' => ['available', 'withdrawn'],
-        'withdrawn' => [],  // Estado terminal — no hay salida
+        'withdrawn' => [],
     ];
 
     public function canTransitionTo(string $newStatus): bool

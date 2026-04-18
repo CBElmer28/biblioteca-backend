@@ -13,6 +13,7 @@ return new class extends Migration
     {
         Schema::create('copies', function (Blueprint $table) {
             $table->uuid('id')->primary()->default(DB::raw('gen_random_uuid()'));
+            $table->unsignedBigInteger('glpi_id')->nullable()->unique()->comment('ID del activo Copy en GLPI');
 
             $table->uuid('book_id');
             $table->foreign('book_id')

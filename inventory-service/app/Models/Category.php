@@ -3,12 +3,13 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Spatie\Sluggable\HasSlug;
 use Spatie\Sluggable\SlugOptions;
 
 class Category extends Model
 {
-    use HasSlug;
+    use HasUuids, HasSlug;
 
     protected $fillable = [
         'name', 'description', 'parent_id', 'sort_order', 'is_active',

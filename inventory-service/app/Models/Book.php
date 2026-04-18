@@ -22,7 +22,7 @@ class Book extends Model
         'dewey_code', 'location_hint',
         'is_digital', 'digital_file_url',
         'total_copies', 'available_copies',
-        'is_active',
+        'is_active','glpi_id',
     ];
 
     protected function casts(): array
@@ -82,17 +82,17 @@ class Book extends Model
 
     public function scopeActive(Builder $query): Builder
     {
-        return $query->where('is_active', true);
+        return $query->whereRaw('is_active = true');
     }
 
     public function scopePhysical(Builder $query): Builder
     {
-        return $query->where('is_digital', false);
+        return $query->whereRaw('is_digital = false');
     }
-
+    
     public function scopeDigital(Builder $query): Builder
     {
-        return $query->where('is_digital', true);
+        return $query->whereRaw('is_digital = true');
     }
 
     public function scopeAvailable(Builder $query): Builder

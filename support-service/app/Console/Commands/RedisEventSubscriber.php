@@ -81,9 +81,19 @@ class RedisEventSubscriber extends Command
                 // Multa generada con monto elevado (umbral configurable)
                 'penalty.generated' => $this->handlePenaltyGenerated($payload),
 
-                // ── Dominio de inventario ─────────────────────────────────────
+                // ── Dominio de inventario (Mirroring CRUD) ────────────────────
 
-                // Cambio de condición crítica en un ejemplar (manual)
+                // Catálogo (Libros)
+                'book.created' => $this->handleBookCreated($payload),
+                'book.updated' => $this->handleBookUpdated($payload),
+                'book.deleted' => $this->handleBookDeleted($payload),
+
+                // Ejemplares Físicos (Copias)
+                'copy.created' => $this->handleCopyCreated($payload),
+                'copy.updated' => $this->handleCopyUpdated($payload),
+                'copy.deleted' => $this->handleCopyDeleted($payload),
+
+                // Cambio de condición crítica en un ejemplar (crea ticket)
                 'copy.damaged'  => $this->handleCopyDamaged($payload),
 
                 // ── Eventos que NO requieren ticket de soporte ────────────────
@@ -169,6 +179,179 @@ class RedisEventSubscriber extends Command
         return $this->ticketService->createCriticalPenaltyTicket(
             array_merge($payload, ['penalty_id' => $payload['penalty_id'] ?? null])
         ) ?? $this->fallback('penalty.generated', $payload);
+    }
+
+
+    private function handleCopyCreated(array $payload): string|array|null
+    {
+        $this->line("  └─ 📘 Nueva copia física detectada. Creando activo en GLPI...");
+
+        try {
+            $glpiService = app(\App\Services\GlpiService::class);
+            
+            // 1. Creamos la copia
+            $result = $glpiService->createCopyAsset($payload);
+            $copiaGlpiId = $result['id'];
+            
+            $this->line("  └─ ✅ Copia GLPI creada con ID: #{$copiaGlpiId}");
+
+            // 2. VINCULAMOS la copia con el Libro Padre
+            if (!empty($payload['book_glpi_id'])) {
+                $glpiService->linkAssets(
+                    config('glpi.book_itemtype'),       // Padre: Glpi\CustomAsset\LibrosAsset
+                    $payload['book_glpi_id'],           // ID del Padre
+                    "Glpi\\CustomAsset\\CopiaLibroAsset", // Hijo: La copia
+                    $copiaGlpiId                        // ID del Hijo recién creado
+                );
+                $this->line("  └─ 🔗 Copia vinculada exitosamente al Catálogo #{$payload['book_glpi_id']}");
+            }
+
+            return $result;
+        } catch (\Throwable $e) {
+            $this->error("  └─ ❌ Error al crear copia en GLPI: {$e->getMessage()}");
+            return null;
+        }
+    }
+
+    /**
+     * copy.updated — Sincroniza cambios de estado (Ej: de Disponible a Prestado).
+     */
+    private function handleCopyUpdated(array $payload): string|array|null
+    {
+        if (empty($payload['glpi_id'])) {
+            $this->error("  └─ ⚠️ Copia sin glpi_id. No se puede actualizar en GLPI.");
+            return 'ignored';
+        }
+
+        $this->line("  └─ 🔄 Estado de copia actualizado. Sincronizando...");
+
+        try {
+            $glpiService = app(\App\Services\GlpiService::class);
+            
+            // Evaluamos si falló
+            $exito = $glpiService->updateCopyStatus($payload['glpi_id'], $payload['status']);
+            
+            if (!$exito) {
+                throw new \RuntimeException("GLPI devolvió error al intentar hacer el PUT.");
+            }
+            
+            $this->line("  └─ ✅ Estado actualizado en GLPI.");
+            
+            // Retornamos 'ignored' en vez de un array con ID, 
+            // para que la consola no imprima "Ticket creado: #X" por error.
+            return 'ignored'; 
+        } catch (\Throwable $e) {
+            $this->error("  └─ ❌ Error al actualizar copia en GLPI: {$e->getMessage()}");
+            return null;
+        }
+    }
+
+    /**
+     * copy.deleted — Envía el activo a la papelera en GLPI.
+     */
+    private function handleCopyDeleted(array $payload): string|array|null
+    {
+        if (empty($payload['glpi_id'])) {
+            return 'ignored';
+        }
+
+        $this->line("  └─ 🗑️ Copia eliminada. Borrando de GLPI...");
+
+        try {
+            $glpiService = app(\App\Services\GlpiService::class);
+            $glpiService->deleteAsset(config('glpi.copy_itemtype'), $payload['glpi_id']);
+            
+            $this->line("  └─ ✅ Copia #{$payload['glpi_id']} enviada a la papelera en GLPI.");
+            return ['id' => $payload['glpi_id']];
+        } catch (\Throwable $e) {
+            $this->error("  └─ ❌ Error al eliminar copia en GLPI: {$e->getMessage()}");
+            return null;
+        }
+    }
+
+    // =========================================================================
+    // Handlers de Mirroring (Catálogo / Libros)
+    // =========================================================================
+
+        /**
+     * book.created — Toma los datos del inventario y crea el activo en GLPI.
+     */
+    private function handleBookCreated(array $payload): string|array|null
+    {
+        $this->line("  └─ 📚 Nuevo libro detectado. Sincronizando como activo en GLPI...");
+
+        try {
+            $glpiService = app(\App\Services\GlpiService::class);
+            $result = $glpiService->createBookAsset($payload);
+            
+            $this->line("  └─ ✅ Activo GLPI creado con ID: #{$result['id']}");
+            return $result;
+        } catch (\Throwable $e) {
+            $this->error("  └─ ❌ Error al sincronizar activo en GLPI: {$e->getMessage()}");
+            return null; // <-- Cambiado de 'failed' a null para evitar el error de lectura de array
+        }
+    }
+
+    /**
+     * book.updated — Actualiza los metadatos del libro en GLPI.
+     */
+    private function handleBookUpdated(array $payload): string|array|null
+    {
+        if (empty($payload['glpi_id'])) {
+            $this->error("  └─ ⚠️ Libro sin glpi_id. Imposible actualizar en GLPI.");
+            return 'ignored';
+        }
+
+        $this->line("  └─ 🔄 Libro actualizado. Sincronizando con GLPI...");
+
+        try {
+            $glpiService = app(\App\Services\GlpiService::class);
+            
+            // Re-empaquetamos los custom fields igual que al crear
+            $customFields = json_encode([
+                "45001" => $payload['title'] ?? 'Sin Título',
+                "45002" => current($payload['authors'] ?? [])['name'] ?? 'Autor Desconocido',
+                "45003" => $payload['isbn_13'] ?? $payload['isbn_10'] ?? '',
+            ]);
+
+            $glpiService->updateAsset(
+                config('glpi.book_itemtype'), 
+                $payload['glpi_id'], 
+                [
+                    'name' => $payload['title'],
+                    'custom_fields' => $customFields
+                ]
+            );
+            
+            $this->line("  └─ ✅ Libro actualizado en GLPI.");
+            return ['id' => $payload['glpi_id']];
+        } catch (\Throwable $e) {
+            $this->error("  └─ ❌ Error al actualizar libro en GLPI: {$e->getMessage()}");
+            return null;
+        }
+    }
+
+    /**
+     * book.deleted — Elimina el libro del catálogo de GLPI.
+     */
+    private function handleBookDeleted(array $payload): string|array|null
+    {
+        if (empty($payload['glpi_id'])) {
+            return 'ignored';
+        }
+
+        $this->line("  └─ 🗑️ Libro eliminado. Borrando de GLPI...");
+
+        try {
+            $glpiService = app(\App\Services\GlpiService::class);
+            $glpiService->deleteAsset(config('glpi.book_itemtype'), $payload['glpi_id']);
+            
+            $this->line("  └─ ✅ Libro #{$payload['glpi_id']} enviado a la papelera en GLPI.");
+            return ['id' => $payload['glpi_id']];
+        } catch (\Throwable $e) {
+            $this->error("  └─ ❌ Error al eliminar libro en GLPI: {$e->getMessage()}");
+            return null;
+        }
     }
 
     /**

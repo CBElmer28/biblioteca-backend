@@ -17,6 +17,7 @@ return new class extends Migration
             // ── Identificadores bibliográficos ────────────────────────────────
             $table->string('isbn_13', 13)->unique()->nullable();
             $table->string('isbn_10', 10)->unique()->nullable();
+            $table->unsignedBigInteger('glpi_id')->nullable()->unique()->comment('ID del activo en GLPI');
 
             // ── Metadatos del título ──────────────────────────────────────────
             $table->string('title');

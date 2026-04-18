@@ -8,7 +8,7 @@
 
 return [
 
-    'url'       => rtrim(env('GLPI_URL', ''), '/'),
+    'url'        => env('GLPI_URL', 'http://glpi:80/api.php/v1'),
     'app_token' => env('GLPI_APP_TOKEN', ''),
     'user_token'=> env('GLPI_USER_TOKEN', ''),
 
@@ -52,5 +52,8 @@ return [
         'inventory'         => env('GLPI_CAT_INVENTORY', null),
         'general'           => env('GLPI_CAT_GENERAL', null),
     ],
+    
+    'book_itemtype' => env('GLPI_BOOK_ITEMTYPE', 'Glpi\\CustomAsset\\LibroAsset'),
+    'copy_itemtype' => env('GLPI_COPY_ITEMTYPE', 'Glpi\\CustomAsset\\CopiaLibroAssetAsset'),
 
 ];

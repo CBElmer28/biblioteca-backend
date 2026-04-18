@@ -41,6 +41,12 @@ Route::middleware('jwt:admin,bibliotecario')->group(function () {
     Route::put('authors/{id}',     [AuthorController::class, 'update']);
     Route::post('categories',      [CategoryController::class, 'store']);
     Route::put('categories/{id}',  [CategoryController::class, 'update']);
+
+    Route::post('books/{id}/sync',  [BookController::class, 'sync']);
+    Route::post('copies/{id}/sync', [CopyController::class, 'sync']);
+
+    Route::patch('internal/books/{id}/glpi-id', [\App\Http\Controllers\Api\BookController::class, 'updateGlpiId']);
+    Route::patch('internal/copies/{id}/glpi-id', [\App\Http\Controllers\Api\CopyController::class, 'updateGlpiId']);
 });
 
 // =============================================================================

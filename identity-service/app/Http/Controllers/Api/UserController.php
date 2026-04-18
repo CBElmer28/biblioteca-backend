@@ -1,6 +1,6 @@
 <?php
 
-namespace App\Http\Controllers;
+namespace App\Http\Controllers\Api;
 
 // =============================================================================
 // UserController — CRUD de usuarios (solo para roles admin/support)
